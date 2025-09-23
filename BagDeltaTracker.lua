@@ -1,0 +1,407 @@
+--[[
+Bag Delata Tracker
+Tracks player-specified items and shows current bag counts + delta (current - baseline).
+Add items by Shift-clicking from bags into the input, or paste an item link or itemID.
+Works on Retail & Classic (uses compatibility wrappers).
+]] BagDeltaTrackerDB = BagDeltaTrackerDB or {
+    items = {},
+    pos = {
+        x = 300,
+        y = -200
+    },
+    scale = 1
+}
+
+local ADDON_NAME = "BagDeltaTracker"
+local f = CreateFrame("Frame", ADDON_NAME .. "Frame", UIParent)
+f:SetSize(460, 360)
+f:SetPoint("CENTER", UIParent, "CENTER", BagDeltaTrackerDB.pos.x or 300, BagDeltaTrackerDB.pos.y or -200)
+f:SetMovable(true)
+f:EnableMouse(true)
+f:RegisterForDrag("LeftButton")
+f:SetScript("OnDragStart", f.StartMoving)
+f:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    local x, y = self:GetLeft(), self:GetTop()
+    local ux, uy = UIParent:GetLeft(), UIParent:GetTop()
+    BagDeltaTrackerDB.pos.x = x - ux
+    BagDeltaTrackerDB.pos.y = y - uy
+end)
+
+f:SetBackdrop({
+    bgFile = "Interface/Tooltips/UI-Tooltip-Background",
+    edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
+    tile = true,
+    tileSize = 16,
+    edgeSize = 16,
+    insets = {
+        left = 3,
+        right = 3,
+        top = 3,
+        bottom = 3
+    }
+})
+f:SetBackdropColor(0, 0, 0, 0.85)
+
+-- Title
+local title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+title:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -10)
+title:SetText("Bag Delta Tracker")
+
+-- Status text
+local statusText = f:CreateFontString(nil, "OVERLAY", "GameFontHightlightSmall")
+statusText:SetPoint("TOPRIGHT", f, "TOPRIGHT", -12, -14)
+statusText:SetText("Idle")
+
+-- Drag handle hint
+local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+hint:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
+hint:SetText("Add items by Shift-clicking them from your bags into the box below.")
+
+-- compatibility shims (Retail vs Classic)
+local Cn = C_Container
+local function ContGetNumSlots(bag)
+    return Cn and Cn.GetContainerNumSlots(bag) or GetContainerNumSlots(bag)
+end
+local function ContGetItemLink(bag, slot)
+    return Cn and Cn.GetContainerItemLink(bag, slot) or GetContainerItemLink(bag, slot)
+end
+local function ContGetItemInfo(bag, slot)
+    if Cn and Cn.GetContainerItemInfo then
+        return Cn.GetContainerItemInfo(bag, slot)
+    end
+    local texture, count, locked, quality, readable, lootable, link = GetContainerItemInfo(bag, slot)
+    return {
+        iconFileID = texture,
+        stackCount = count,
+        isLocked = locked,
+        quality = quality,
+        hyperlink = link
+    }
+end
+
+-- Count total of itemID in bags (0-4)
+local function CountItemInBags(itemID)
+    if not itemID then
+        return 0
+    end
+    local total = 0
+    for bag = 0, 4 do
+        local slots = ContGetNumSlots(bag) or 0
+        for slot = 1, slots do
+            local info = ContGetItemInfo(bag, slot)
+            local link = info and (info.hyperlink or CountGetItemLink(bag, slot))
+            if link then
+                local id = tonumber(link:match("item:(%d+)"))
+                if id == itemID then
+                    total = total + (info.stackCount or 0)
+                end
+            end
+        end
+    end
+    return total
+end
+
+-- Parse user input into itemID + (name, icon)
+local pendingAdds = {} -- for items awaiting GetItemInfo
+local function ResolveItem(input)
+    if not input or input == "" then
+        return
+    end
+    input = input:gsub("^%s+", ""):gsub("%s+$", "")
+
+    -- If it's an item link, extract the ID
+    local idFromLink = input:match("item:(%d+)")
+    if idFromLink then
+        local itemID = tonumber(idFromLink)
+        return itemID
+    end
+
+    -- If it looks like a pure number, treat as ID
+    local asNum = tonumber(input)
+    if asNum then
+        return asNum
+    end
+
+    -- Otherwise, try to parse a plain item name by creating a fake link lookup.
+    -- (Works if cached; if not, user should use a link or ID)
+    local name = input
+    local itemName, itemLink, _, _, _, _, _, _, _, itemIcon, itemID = GetItemInfo(name)
+    if itemID then
+        return itemID
+    end
+
+    return nil, "Please Shift-click an item from your bags, paste an item link, or enter a numeric itemID."
+end
+
+-- DB schema:
+-- BagDeltaTrackerDB.items[itemID] = { name = "...", icon = textureID }
+-- runtime
+local baseline = nil -- table[itemID] = count
+local running = false
+
+-- UI: Input + Add button
+local edit = CreateFrame("EditBox", ADDON_NAME .. "EditBox", f, "InputBoxTemplate")
+edit:SetAutoFocus(false)
+edit:SetSize(260, 24)
+edit:SetPoint("TOPLEFT", hint, "BOTTOMLEFT", 0, -8)
+edit:SetText("")
+edit:HookScript("OnEscapePressed", function(self)
+    self:ClearFocus()
+end)
+
+local addBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+addBtn:SetText("Add Item")
+addBtn:SetSize(90, 24)
+addBtn:SetPoint("LEFT", edit, "RIGHT", 8, 0)
+
+local helpText = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+helpText:SetPoint("LEFT", addBtn, "RIGHT", 8, 0)
+helpText:SetText("Shift-click items here →")
+
+-- Buttons: Start / End / Reset
+local startBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+startBtn:SetText("Start")
+startBtn:SetSize(80, 24)
+startBtn:SetPoint("TOPLEFT", edit, "BOTTOMLEFT", 0, -10)
+
+local endBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+endBtn:SetText("End")
+endBtn:SetSize(80, 24)
+endBtn:SetPoint("LEFT", startBtn, "RIGHT", 8, 0)
+
+local resetBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+resetBtn:SetText("Reset")
+resetBtn:SetSize(80, 24)
+resetBtn:SetPoint("LEFT", endBtn, "RIGHT", 8, 0)
+
+-- Headers
+local header = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+header:SetPoint("TOPLEFT", startBtn, "BOTTOMLEFT", 0, -10)
+header:SetText(("|TInterface\\COMMON\\friendlist-plus:0|t Tracked Items:    %s  %s  %s"):format("Name", "Current",
+    "Δ Since Start"))
+
+-- List container
+local listFrame = CreateFrame("Frame", nil, f)
+listFrame:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -6)
+listFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -12, 12)
+
+-- We'll render rows dynamically (no scroll; practical for ~25 items)
+local rows = {}
+local function GetRow(i)
+    if rows[i] then
+        return rows[i]
+    end
+    local row = CreateFrame("Frame", nil, listFrame)
+    row:SetSize(420, 20)
+    if i == 1 then
+        row:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 0, 0)
+    else
+        row:SetPoint("TOPLEFT", rows[i - 1], "BOTTOMLEFT", 0, -4)
+    end
+
+    row.icon = row:CreateTexture(nil, "ARTWORK")
+    row.icon:SetSize(18, 18)
+    row.icon:SetPoint("LEFT", row, "LEFT", 2, 0)
+
+    row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.name:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
+    row.name:SetWidth(200)
+    row.name:SetJustifyH("LEFT")
+
+    row.count = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.count:SetPoint("LEFT", row.name, "RIGHT", 12, 0)
+    row.count:SetWidth(60)
+    row.count:SetJustifyH("RIGHT")
+
+    row.delta = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.delta:SetPoint("LEFT", row.count, "RIGHT", 16, 0)
+    row.delta:SetWidth(80)
+    row.delta:SetJustifyH("RIGHT")
+
+    row.remove = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+    row.remove:SetText("X")
+    row.remove:SetSize(22, 18)
+    row.remove:SetPoint("LEFT", row.delta, "RIGHT", 10, 0)
+
+    rows[i] = row
+    return row
+end
+
+local function SortedItemIDs()
+    local ids = {}
+    for id in pairs(BagDeltaTrackerDB.items) do
+        ids[#ids + 1] = id
+    end
+    table.sort(ids, function(a, b)
+        local A = BagDeltaTrackerDB.items[a] and BagDeltaTrackerDB.items[a].name or tostring(a)
+        local B = BagDeltaTrackerDB.items[b] and BagDeltaTrackerDB.items[b].name or tostring(b)
+        return A:lower() < B:lower()
+    end)
+    return ids
+end
+
+local function UpdateStatus()
+    if running then
+        statusText:SetText("|cff00ff00Running|r")
+    elseif baseline then
+        statusText:SetText("|cffffff00Ended (baseline kept)|r")
+    else
+        statusText:SetText("Idle")
+    end
+end
+
+local function UpdateList()
+    local ids = SortedItemIDs()
+    local neededRows = #ids
+    -- Show/hide rows
+    for i = 1, math.max(neededRows, #rows) do
+        local row = GetRow(i)
+        if i <= neededRows then
+            local itemID = ids[i]
+            local meta = BagDeltaTrackerDB.items[itemID]
+            local name = meta and meta.name or ("Item " .. itemID)
+            local icon = meta and meta.icon or 134400 -- inv_misc_questionmark
+            local current = CountItemInBags(itemID)
+            local base = baseline and baseline[itemID] or nil
+            local delta = base and (current - base) or 0
+            local deltaText = base and ((delta >= 0) and ("|cff00ff00+" .. delta .. "|r") or ("|cffff2020" .. delta .. "|r")) or "-"
+
+            row.icon:SetTexture(icon)
+            row.name:SetText(name)
+            row.count:SetText(tostring(current))
+            row.delta:SetText(deltaText)
+
+            row.remove:SetScript("OnClick", function()
+                BagDeltaTrackerDB.items[itemID] = nil
+                UpdateList()
+            end)
+
+            row:Show()
+        else
+
+            row:Hide()
+        end
+    end
+    UpdateStatus()
+end
+
+local function EnsureItemMeta(itemID)
+    if BagDeltaTrackerDB.items[itemID] and BagDeltaTrackerDB.items[itemID].name then return end
+    local name, link, _, _, _, _, _, _, _, icon = GetItemInfo(itemID)
+    if name then
+        BagDeltaTrackerDB.items[itemID] = BagDeltaTrackerDB.items[itemID] or {}
+        BagDeltaTrackerDB.items[itemID] = name
+        BagDeltaTrackerDB.items[itemID].icon = icon or 134400
+        return true
+    else
+        -- queue for later
+        pendingAdds[itemID] = true
+        return false
+    end
+end
+
+-- Button handlers
+addBtn:SetScript("OnClick", function()
+    local txt = edit:GetText()
+    local itemID, err = ResolveItem(txt)
+    if not itemID then
+        UIErrorsFrame:AddMessage(err or "Invalid item.", 1, 0.2, 0.2, 3)
+        return
+    end
+    BagDeltaTrackerDB.items[itemID] = BagDeltaTrackerDB.items[itemID] or {}
+    if not EnsureItemMeta(itemID) then
+        -- Will resolve of GET_ITEM_INFO_RECEIVED
+    end
+    edit:SetText("")
+    UpdateList()
+end)
+
+startBtn:SetScript("OnClick", function()
+    baseline {}
+    for itemID in pairs(BagDeltaTrackerDB.items) do
+        baseline[itemID] = CountItemInBags(itemID)
+    end
+    running = true
+    UpdateList()
+end)
+
+endBtn:SetScript("OnClick", function()
+    running = false
+    -- keep baseline so the delta remains visible
+    UpdateList()
+end)
+
+resetBtn:SetScript("OnClick", function()
+    running = false
+    baseline = nil
+    UpdateList()
+end)
+
+-- Slash command for quick toggle
+SLASH_BAGDELTATRACKER1 = "/bdt"
+SlashCmdList["BAGDELTATRACKER"] = function(msg)
+    msg = (msg or ""):lower()
+    if msg == "show" or msg == "" then
+        f:Show()
+    elseif msg == "hide" then
+        f:Hide()
+    elseif msg == "reset" then
+        baseline = nil; running = false; UpdateList()
+    else
+        print("|cff33ff99BagDeltaTracker|r commands /bdt show | hide | reset")
+    end        
+end
+
+-- Event handling
+f:SetScript("OnEvent", function(self, event, ...)
+    if event == "PLAYER_LOGIN" then
+        -- Try to populate missing item metas (after warm cache)
+        for itemID in pairs(BagDeltaTrackerDB.items) do EnsureItemMeta(itemID) end
+        UpdateList()
+    elseif event == "BAG_UPDATE_DELAYED" then
+        if next(BagDeltaTrackerDB.items) ~= nil then
+            UpdateList()
+        end
+    elseif event == "GET_ITEM_INFO_RECEIVED" then
+        local itemID, success = ...
+        if success and pendingAdds[itemID] then
+            pendingAdds[itemID] = nil
+            EnsureItemMeta(itemID)
+            UpdateList()
+        end
+    end
+end)
+f:RegisterEvent("PLAYER_LOGIN")
+f:RegisterEvent("BAG_UPDATE_DELAYED")
+f:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+
+-- Make the frame prettier and movable with a close button
+local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+close:SetPoint("TOPRIGHT", f, "TOPRIGHT", 4, 4)
+
+-- Draw a simple border line under the input area
+local line = f:CreateTexture(nil, "BACKGROUND")
+line:SetColorTexture(1,1,1,0.08)
+line:SetPoint("TOPLEFT", edit, "BOTTOMLEFT", -6, -6)
+line:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -6)
+line:SetHeight(1)
+
+-- Tooltip on row remove Buttons
+local function HookRemoveTooltip(btn)
+    btn:HookScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("Remove", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    btn.HookScript("OnLeave", function(self) GameTooltip:Hide() end)
+end
+
+-- Ensure tooltips are hooked as rows are created
+hooksecurefunc("CreateFrame", function(ftype, name, parent, template)
+    -- nothing needed here; rows are hooked when created
+end)
+for _, r in ipairs(rows) do if r.remove then HookRemoveTooltip(r.remove) end end
+
+-- Initial render
+UpdateList()

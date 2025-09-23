@@ -1,0 +1,8 @@
+## Interface: 110200
+## Title: Bag Delta Tracker
+## Notes: Track bag count changes for specified items between Start and End
+## Author: Fornzy
+## Version 0.1.0
+## SavedVariables: BagDeltaTrackerDB
+
+BagDeltaTracker.lua
