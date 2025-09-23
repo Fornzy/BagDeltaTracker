@@ -13,7 +13,7 @@ Works on Retail & Classic (uses compatibility wrappers).
 }
 
 local ADDON_NAME = "BagDeltaTracker"
-local f = CreateFrame("Frame", ADDON_NAME .. "Frame", UIParent)
+local f = CreateFrame("Frame", ADDON_NAME .. "Frame", UIParent, "BackdropTemplate")
 f:SetSize(460, 360)
 f:SetPoint("CENTER", UIParent, "CENTER", BagDeltaTrackerDB.pos.x or 300, BagDeltaTrackerDB.pos.y or -200)
 f:SetMovable(true)
@@ -31,15 +31,8 @@ end)
 f:SetBackdrop({
     bgFile = "Interface/Tooltips/UI-Tooltip-Background",
     edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
-    tile = true,
-    tileSize = 16,
-    edgeSize = 16,
-    insets = {
-        left = 3,
-        right = 3,
-        top = 3,
-        bottom = 3
-    }
+    tile = true, tileSize = 16, edgeSize = 16,
+    insets = { left = 3, right = 3, top = 3, bottom = 3}
 })
 f:SetBackdropColor(0, 0, 0, 0.85)
 
@@ -49,7 +42,7 @@ title:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -10)
 title:SetText("Bag Delta Tracker")
 
 -- Status text
-local statusText = f:CreateFontString(nil, "OVERLAY", "GameFontHightlightSmall")
+local statusText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 statusText:SetPoint("TOPRIGHT", f, "TOPRIGHT", -12, -14)
 statusText:SetText("Idle")
 
@@ -155,10 +148,6 @@ addBtn:SetText("Add Item")
 addBtn:SetSize(90, 24)
 addBtn:SetPoint("LEFT", edit, "RIGHT", 8, 0)
 
-local helpText = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-helpText:SetPoint("LEFT", addBtn, "RIGHT", 8, 0)
-helpText:SetText("Shift-click items here →")
-
 -- Buttons: Start / End / Reset
 local startBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
 startBtn:SetText("Start")
@@ -179,7 +168,7 @@ resetBtn:SetPoint("LEFT", endBtn, "RIGHT", 8, 0)
 local header = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 header:SetPoint("TOPLEFT", startBtn, "BOTTOMLEFT", 0, -10)
 header:SetText(("|TInterface\\COMMON\\friendlist-plus:0|t Tracked Items:    %s  %s  %s"):format("Name", "Current",
-    "Δ Since Start"))
+    "Delta Since Start"))
 
 -- List container
 local listFrame = CreateFrame("Frame", nil, f)
@@ -291,7 +280,7 @@ local function EnsureItemMeta(itemID)
     local name, link, _, _, _, _, _, _, _, icon = GetItemInfo(itemID)
     if name then
         BagDeltaTrackerDB.items[itemID] = BagDeltaTrackerDB.items[itemID] or {}
-        BagDeltaTrackerDB.items[itemID] = name
+        BagDeltaTrackerDB.items[itemID].name = name
         BagDeltaTrackerDB.items[itemID].icon = icon or 134400
         return true
     else
@@ -306,7 +295,7 @@ addBtn:SetScript("OnClick", function()
     local txt = edit:GetText()
     local itemID, err = ResolveItem(txt)
     if not itemID then
-        UIErrorsFrame:AddMessage(err or "Invalid item.", 1, 0.2, 0.2, 3)
+        UIErrorsFrame:AddMessage(err or "Invalid item.", 1, 0.2, 0.2)
         return
     end
     BagDeltaTrackerDB.items[itemID] = BagDeltaTrackerDB.items[itemID] or {}
@@ -318,7 +307,7 @@ addBtn:SetScript("OnClick", function()
 end)
 
 startBtn:SetScript("OnClick", function()
-    baseline {}
+    baseline = {}
     for itemID in pairs(BagDeltaTrackerDB.items) do
         baseline[itemID] = CountItemInBags(itemID)
     end
