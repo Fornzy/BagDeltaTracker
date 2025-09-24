@@ -1,4 +1,4 @@
---[[
+﻿--[[
 Bag Delta Tracker (Retail Only)
 Tracks player-specified items and shows current bag counts + delta (current - baseline).
 Add items by Shift-clicking from bags into the input, or paste an item link or itemID.
@@ -21,7 +21,7 @@ end
 
 local ADDON_NAME = "BagDeltaTracker"
 local f = CreateFrame("Frame", ADDON_NAME .. "Frame", UIParent, "BackdropTemplate")
-f:SetSize(460, 360)
+f:SetSize(620, 360)
 f:SetPoint("CENTER", UIParent, "CENTER", BagDeltaTrackerDB.pos.x or 300, BagDeltaTrackerDB.pos.y or -200)
 f:SetMovable(true)
 f:EnableMouse(true)
@@ -61,6 +61,16 @@ hint:SetText("Add items by Shift-clicking them from your bags into the box below
 local elapsed = 0
 local running = false
 local baseline = nil
+local baselineGold = nil
+
+local ICON_OFFSET = 2
+local ICON_SIZE = 18
+local NAME_LEFT = ICON_OFFSET + ICON_SIZE + 6
+local NAME_WIDTH = 230
+local CURRENT_LEFT = NAME_LEFT + NAME_WIDTH + 12
+local CURRENT_WIDTH = 150
+local DELTA_LEFT = CURRENT_LEFT + CURRENT_WIDTH + 16
+local DELTA_WIDTH = 140
 
 f:SetScript("OnUpdate", function(self, dt)
     if running then
@@ -95,6 +105,16 @@ local function CountItemInBags(itemID)
 
     count = count or 0
     return count
+end
+
+local function GetPlayerMoney()
+    if GetMoney then
+        local ok, result = pcall(GetMoney)
+        if ok and type(result) == "number" then
+            return result
+        end
+    end
+    return 0
 end
 
 -- Parse user input into itemID
@@ -160,13 +180,31 @@ resetBtn:SetSize(80, 24)
 resetBtn:SetPoint("LEFT", endBtn, "RIGHT", 8, 0)
 
 -- Headers
-local header = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-header:SetPoint("TOPLEFT", startBtn, "BOTTOMLEFT", 0, -10)
-header:SetText(("|TInterface\\COMMON\\friendlist-plus:0|t Tracked Items:    %s  %s  %s"):format("Name", "Current", "Delta Since Start"))
+local headerContainer = CreateFrame("Frame", nil, f)
+headerContainer:SetPoint("TOPLEFT", startBtn, "BOTTOMLEFT", 0, -10)
+headerContainer:SetPoint("TOPRIGHT", f, "TOPRIGHT", -12, 0)
+headerContainer:SetHeight(16)
 
+local headerTracked = headerContainer:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+headerTracked:SetPoint("LEFT", headerContainer, "LEFT", NAME_LEFT, 0)
+headerTracked:SetWidth(NAME_WIDTH)
+headerTracked:SetJustifyH("LEFT")
+headerTracked:SetText("Tracked Gold & Items")
+
+local headerCurrent = headerContainer:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+headerCurrent:SetPoint("LEFT", headerContainer, "LEFT", CURRENT_LEFT, 0)
+headerCurrent:SetWidth(CURRENT_WIDTH)
+headerCurrent:SetJustifyH("RIGHT")
+headerCurrent:SetText("Current")
+
+local headerDelta = headerContainer:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+headerDelta:SetPoint("LEFT", headerContainer, "LEFT", DELTA_LEFT, 0)
+headerDelta:SetWidth(DELTA_WIDTH)
+headerDelta:SetJustifyH("RIGHT")
+headerDelta:SetText("Delta Since Start")
 -- List container
 local listFrame = CreateFrame("Frame", nil, f)
-listFrame:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -6)
+listFrame:SetPoint("TOPLEFT", headerContainer, "BOTTOMLEFT", 0, -6)
 listFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -12, 12)
 
 -- We'll render rows dynamically (no scroll; practical for ~25 items)
@@ -174,31 +212,33 @@ local rows = {}
 local function GetRow(i)
     if rows[i] then return rows[i] end
     local row = CreateFrame("Frame", nil, listFrame)
-    row:SetSize(420, 20)
+    row:SetHeight(20)
     if i == 1 then
         row:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 0, 0)
+        row:SetPoint("TOPRIGHT", listFrame, "TOPRIGHT", 0, 0)
     else
         row:SetPoint("TOPLEFT", rows[i - 1], "BOTTOMLEFT", 0, -4)
+        row:SetPoint("TOPRIGHT", rows[i - 1], "BOTTOMRIGHT", 0, -4)
     end
     row.icon = row:CreateTexture(nil, "ARTWORK")
-    row.icon:SetSize(18, 18)
-    row.icon:SetPoint("LEFT", row, "LEFT", 2, 0)
+    row.icon:SetSize(ICON_SIZE, ICON_SIZE)
+    row.icon:SetPoint("LEFT", row, "LEFT", ICON_OFFSET, 0)
     row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.name:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
-    row.name:SetWidth(200)
+    row.name:SetPoint("LEFT", row, "LEFT", NAME_LEFT, 0)
+    row.name:SetWidth(NAME_WIDTH)
     row.name:SetJustifyH("LEFT")
     row.count = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.count:SetPoint("LEFT", row.name, "RIGHT", 12, 0)
-    row.count:SetWidth(60)
+    row.count:SetPoint("LEFT", row, "LEFT", CURRENT_LEFT, 0)
+    row.count:SetWidth(CURRENT_WIDTH)
     row.count:SetJustifyH("RIGHT")
     row.delta = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.delta:SetPoint("LEFT", row.count, "RIGHT", 16, 0)
-    row.delta:SetWidth(80)
+    row.delta:SetPoint("LEFT", row, "LEFT", DELTA_LEFT, 0)
+    row.delta:SetWidth(DELTA_WIDTH)
     row.delta:SetJustifyH("RIGHT")
     row.remove = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
     row.remove:SetText("X")
     row.remove:SetSize(22, 18)
-    row.remove:SetPoint("LEFT", row.delta, "RIGHT", 10, 0)
+    row.remove:SetPoint("LEFT", row.delta, "RIGHT", 12, 0)
     rows[i] = row
     return row
 end
@@ -226,36 +266,84 @@ local function UpdateStatus()
     end
 end
 
-function UpdateList()
-    local ids = SortedItemIDs()
-    local neededRows = #ids
-    for i = 1, math.max(neededRows, #rows) do
-        local row = GetRow(i)
-        if i <= neededRows then
-            local itemID = ids[i]
-            local meta = BagDeltaTrackerDB.items[itemID]
-            local name = meta and meta.name or ("Item " .. itemID)
-            local icon = meta and meta.icon or 134400
-            local current = CountItemInBags(itemID)
-            local base = baseline and baseline[itemID] or nil
-            local delta = base and (current - base) or 0
-            local deltaText = base and ((delta >= 0) and ("|cff00ff00+" .. delta .. "|r") or ("|cffff2020" .. delta .. "|r")) or "-"
-            row.icon:SetTexture(icon)
-            row.name:SetText(name)
-            row.count:SetText(tostring(current))
-            row.delta:SetText(deltaText)
-            row.remove:SetScript("OnClick", function()
-                BagDeltaTrackerDB.items[itemID] = nil
-                UpdateList()
-            end)
-            row:Show()
-        else
-            row:Hide()
-        end
+local GOLD_ICON_TEXTURE = 133784
+
+local function FormatItemDelta(base, delta)
+    if not base then return "-" end
+    if delta >= 0 then
+        return "|cff00ff00+" .. delta .. "|r"
+    else
+        return "|cffff2020" .. delta .. "|r"
     end
-    UpdateStatus()
 end
 
+local function FormatGoldAmount(amount)
+    amount = amount or 0
+    if GetMoneyString then
+        return GetMoneyString(amount, true)
+    end
+    local gold = math.floor(amount / 10000)
+    local silver = math.floor((amount % 10000) / 100)
+    local copper = amount % 100
+    return string.format("%dg %ds %dc", gold, silver, copper)
+end
+
+local function FormatGoldDelta(current, baselineValue)
+    if not baselineValue then
+        return "-"
+    end
+    local diff = current - baselineValue
+    if diff == 0 then
+        return "|cffcccccc" .. FormatGoldAmount(0) .. "|r"
+    end
+    local prefix = diff > 0 and "+" or "-"
+    local color = diff > 0 and "|cff00ff00" or "|cffff2020"
+    return color .. prefix .. FormatGoldAmount(math.abs(diff)) .. "|r"
+end
+
+function UpdateList()
+    local rowIndex = 1
+    local currentGold = GetPlayerMoney()
+    local goldRow = GetRow(rowIndex)
+    goldRow.icon:SetTexture(GOLD_ICON_TEXTURE)
+    goldRow.name:SetText("Gold")
+    goldRow.count:SetText(FormatGoldAmount(currentGold))
+    goldRow.delta:SetText(FormatGoldDelta(currentGold, baselineGold))
+    goldRow.remove:SetScript("OnClick", nil)
+    goldRow.remove:Hide()
+    goldRow.remove:Disable()
+    goldRow:Show()
+    rowIndex = rowIndex + 1
+
+    local ids = SortedItemIDs()
+    for _, itemID in ipairs(ids) do
+        local row = GetRow(rowIndex)
+        local meta = BagDeltaTrackerDB.items[itemID]
+        local name = meta and meta.name or ("Item " .. itemID)
+        local icon = meta and meta.icon or 134400
+        local current = CountItemInBags(itemID)
+        local base = baseline and baseline[itemID] or nil
+        local delta = base and (current - base) or 0
+        row.icon:SetTexture(icon)
+        row.name:SetText(name)
+        row.count:SetText(tostring(current))
+        row.delta:SetText(FormatItemDelta(base, delta))
+        row.remove:SetScript("OnClick", function()
+            BagDeltaTrackerDB.items[itemID] = nil
+            UpdateList()
+        end)
+        row.remove:Show()
+        row.remove:Enable()
+        row:Show()
+        rowIndex = rowIndex + 1
+    end
+
+    for i = rowIndex, #rows do
+        rows[i]:Hide()
+    end
+
+    UpdateStatus()
+end
 local function EnsureItemMeta(itemID)
     if BagDeltaTrackerDB.items[itemID] and BagDeltaTrackerDB.items[itemID].name then return end
     local name, _, _, _, _, _, _, _, _, icon = GetItemInfo(itemID)
@@ -292,6 +380,7 @@ startBtn:SetScript("OnClick", function()
     for itemID in pairs(BagDeltaTrackerDB.items) do
         baseline[itemID] = CountItemInBags(itemID)
     end
+    baselineGold = GetPlayerMoney()
     running = true
     UpdateList()
 end)
@@ -304,6 +393,7 @@ end)
 resetBtn:SetScript("OnClick", function()
     running = false
     baseline = nil
+    baselineGold = nil
     UpdateList()
 end)
 
@@ -316,7 +406,7 @@ SlashCmdList["BAGDELTATRACKER"] = function(msg)
     elseif msg == "hide" then
         f:Hide()
     elseif msg == "reset" then
-        baseline = nil; running = false; UpdateList()
+        baseline = nil; baselineGold = nil; running = false; UpdateList()
     else
         print("|cff33ff99BagDeltaTracker|r commands /bdt show | hide | reset")
     end        
@@ -331,6 +421,8 @@ f:SetScript("OnEvent", function(self, event, ...)
         if next(BagDeltaTrackerDB.items) ~= nil then
             UpdateList()
         end
+    elseif event == "PLAYER_MONEY" then
+        UpdateList()
     elseif event == "GET_ITEM_INFO_RECEIVED" then
         local itemID, success = ...
         if success and pendingAdds[itemID] then
@@ -342,6 +434,7 @@ f:SetScript("OnEvent", function(self, event, ...)
 end)
 f:RegisterEvent("PLAYER_LOGIN")
 f:RegisterEvent("BAG_UPDATE_DELAYED")
+f:RegisterEvent("PLAYER_MONEY")
 f:RegisterEvent("GET_ITEM_INFO_RECEIVED")
 
 -- Close button
