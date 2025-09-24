@@ -2,12 +2,14 @@
 Bag Delta Tracker (Retail Only)
 Tracks player-specified items and shows current bag counts + delta (current - baseline).
 Add items by Shift-clicking from bags into the input, or paste an item link or itemID.
-]]
-
-BagDeltaTrackerDB = BagDeltaTrackerDB or {
+]] BagDeltaTrackerDB = BagDeltaTrackerDB or {
     items = {},
-    pos = { x = 300, y = -200 },
-    scale = 1
+    pos = {
+        x = 300,
+        y = -200
+    },
+    scale = 1,
+    runCount = 1
 }
 
 -- Clean up old string keys in items table
@@ -18,6 +20,8 @@ do
     end
     BagDeltaTrackerDB.items = new
 end
+
+BagDeltaTrackerDB.runCount = tonumber(BagDeltaTrackerDB.runCount) or 1
 
 local ADDON_NAME = "BagDeltaTracker"
 local f = CreateFrame("Frame", ADDON_NAME .. "Frame", UIParent, "BackdropTemplate")
@@ -38,8 +42,15 @@ end)
 f:SetBackdrop({
     bgFile = "Interface/Tooltips/UI-Tooltip-Background",
     edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
-    tile = true, tileSize = 16, edgeSize = 16,
-    insets = { left = 3, right = 3, top = 3, bottom = 3}
+    tile = true,
+    tileSize = 16,
+    edgeSize = 16,
+    insets = {
+        left = 3,
+        right = 3,
+        top = 3,
+        bottom = 3
+    }
 })
 f:SetBackdropColor(0, 0, 0, 0.85)
 
@@ -63,6 +74,71 @@ local running = false
 local baseline = nil
 local baselineGold = nil
 
+local timerActive = false
+local timerStartTime = nil
+local timerElapsed = 0
+local timerText
+local runCountText
+local avgFrame
+local avgElapsedText
+local avgMessage
+local avgListFrame
+local avgRows = {}
+local UpdateAvgFrame
+
+local function FormatSeconds(totalSeconds)
+    totalSeconds = math.max(0, math.floor(totalSeconds or 0))
+    local hours = math.floor(totalSeconds / 3600)
+    local minutes = math.floor((totalSeconds % 3600) / 60)
+    local seconds = totalSeconds % 60
+    return string.format("%02d:%02d:%02d", hours, minutes, seconds)
+end
+
+local function UpdateTimerDisplay()
+    if not timerText then
+        return
+    end
+    local total = math.floor(timerElapsed or 0)
+    local hours = math.floor(total / 3600)
+    local minutes = math.floor((total % 3600) / 60)
+    local seconds = total % 60
+    timerText:SetText(string.format("Timer: %02d:%02d:%02d", hours, minutes, seconds))
+end
+
+local function UpdateRunCountDisplay()
+    if not runCountText then
+        return
+    end
+    local count = BagDeltaTrackerDB.runCount or 1
+    runCountText:SetText(string.format("Run Count: %d", count))
+end
+
+local function StartTimer()
+    timerStartTime = GetTime()
+    timerElapsed = 0
+    timerActive = true
+    UpdateTimerDisplay()
+    UpdateAvgFrame()
+end
+
+local function StopTimer()
+    if timerActive and timerStartTime then
+        timerElapsed = GetTime() - timerStartTime
+    end
+    timerActive = false
+    timerStartTime = nil
+    UpdateTimerDisplay()
+    UpdateAvgFrame()
+end
+
+local function ResetTimer()
+    timerActive = false
+    timerStartTime = nil
+    timerElapsed = 0
+    UpdateTimerDisplay()
+    UpdateAvgFrame()
+end
+
 local ICON_OFFSET = 2
 local ICON_SIZE = 18
 local NAME_LEFT = ICON_OFFSET + ICON_SIZE + 6
@@ -72,6 +148,18 @@ local CURRENT_WIDTH = 150
 local DELTA_LEFT = CURRENT_LEFT + CURRENT_WIDTH + 16
 local DELTA_WIDTH = 140
 
+timerText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+timerText:SetPoint("TOPRIGHT", statusText, "BOTTOMRIGHT", 0, -4)
+timerText:SetJustifyH("RIGHT")
+timerText:SetText("Timer: 00:00:00")
+
+runCountText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+runCountText:SetPoint("TOPRIGHT", timerText, "BOTTOMRIGHT", 0, -4)
+runCountText:SetJustifyH("RIGHT")
+runCountText:SetText("Run Count: " .. (BagDeltaTrackerDB.runCount or 1))
+
+UpdateTimerDisplay()
+UpdateRunCountDisplay()
 f:SetScript("OnUpdate", function(self, dt)
     if running then
         elapsed = elapsed + dt
@@ -80,12 +168,28 @@ f:SetScript("OnUpdate", function(self, dt)
             elapsed = 0
         end
     end
+
+    if timerActive and timerStartTime then
+        timerElapsed = GetTime() - timerStartTime
+        UpdateTimerDisplay()
+        if avgFrame and avgFrame:IsShown() then
+            UpdateAvgFrame()
+        else
+            if avgElapsedText then
+                avgElapsedText:SetText("Elapsed: " .. FormatSeconds(timerElapsed))
+            end
+        end
+    elseif avgElapsedText then
+        avgElapsedText:SetText("Elapsed: " .. FormatSeconds(timerElapsed))
+    end
 end)
 
 -- Count total of itemID in all player bags (including reagent bag)
 local function CountItemInBags(itemID)
     itemID = tonumber(itemID)
-    if not itemID then return 0 end
+    if not itemID then
+        return 0
+    end
 
     local count = 0
 
@@ -120,18 +224,26 @@ end
 -- Parse user input into itemID
 local pendingAdds = {}
 local function ResolveItem(input)
-    if not input or input == "" then return end
+    if not input or input == "" then
+        return
+    end
     input = input:gsub("^%s+", ""):gsub("%s+$", "")
     -- If it's an item link, extract the ID
     local idFromLink = input:match("item:(%d+)")
-    if idFromLink then return tonumber(idFromLink) end
+    if idFromLink then
+        return tonumber(idFromLink)
+    end
     -- If it's a number, treat as ID
     local asNum = tonumber(input)
-    if asNum then return asNum end
+    if asNum then
+        return asNum
+    end
     -- Try to parse a plain item name (if cached)
     local name = input
     local itemName, _, _, _, _, _, _, _, _, _, itemID = GetItemInfo(name)
-    if itemID then return itemID end
+    if itemID then
+        return itemID
+    end
     return nil, "Please Shift-click an item from your bags, paste an item link, or enter a numeric itemID."
 end
 
@@ -141,7 +253,9 @@ edit:SetAutoFocus(false)
 edit:SetSize(260, 24)
 edit:SetPoint("TOPLEFT", hint, "BOTTOMLEFT", 0, -8)
 edit:SetText("")
-edit:HookScript("OnEscapePressed", function(self) self:ClearFocus() end)
+edit:HookScript("OnEscapePressed", function(self)
+    self:ClearFocus()
+end)
 edit:SetMultiLine(false)
 function edit:InsertLink(link)
     if type(link) == "string" then
@@ -150,7 +264,9 @@ function edit:InsertLink(link)
     end
 end
 edit:EnableMouse(true)
-edit:SetScript("OnMouseDown", function(self) self:SetFocus() end)
+edit:SetScript("OnMouseDown", function(self)
+    self:SetFocus()
+end)
 hooksecurefunc("ChatEdit_InsertLink", function(link)
     if edit:IsVisible() and edit:HasFocus() then
         edit:InsertLink(link)
@@ -178,6 +294,11 @@ local resetBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
 resetBtn:SetText("Reset")
 resetBtn:SetSize(80, 24)
 resetBtn:SetPoint("LEFT", endBtn, "RIGHT", 8, 0)
+
+local avgBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+avgBtn:SetText("Avg/hr")
+avgBtn:SetSize(80, 24)
+avgBtn:SetPoint("LEFT", resetBtn, "RIGHT", 8, 0)
 
 -- Headers
 local headerContainer = CreateFrame("Frame", nil, f)
@@ -210,7 +331,9 @@ listFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -12, 12)
 -- We'll render rows dynamically (no scroll; practical for ~25 items)
 local rows = {}
 local function GetRow(i)
-    if rows[i] then return rows[i] end
+    if rows[i] then
+        return rows[i]
+    end
     local row = CreateFrame("Frame", nil, listFrame)
     row:SetHeight(20)
     if i == 1 then
@@ -243,6 +366,96 @@ local function GetRow(i)
     return row
 end
 
+avgFrame = CreateFrame("Frame", ADDON_NAME .. "AvgFrame", UIParent, "BackdropTemplate")
+avgFrame:SetSize(540, 320)
+avgFrame:SetPoint("TOPLEFT", f, "TOPRIGHT", 16, 0)
+avgFrame:SetScale(BagDeltaTrackerDB.scale or 1)
+avgFrame:SetBackdrop(f:GetBackdrop())
+avgFrame:SetBackdropColor(0, 0, 0, 0.85)
+avgFrame:SetMovable(true)
+avgFrame:EnableMouse(true)
+avgFrame:RegisterForDrag("LeftButton")
+avgFrame:SetScript("OnDragStart", avgFrame.StartMoving)
+avgFrame:SetScript("OnDragStop", avgFrame.StopMovingOrSizing)
+avgFrame:Hide()
+
+local avgTitle = avgFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+avgTitle:SetPoint("TOPLEFT", avgFrame, "TOPLEFT", 12, -10)
+avgTitle:SetText("Per-Hour Averages")
+
+avgElapsedText = avgFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+avgElapsedText:SetPoint("TOPRIGHT", avgFrame, "TOPRIGHT", -12, -14)
+avgElapsedText:SetText("Elapsed: 00:00:00")
+
+avgMessage = avgFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+avgMessage:SetPoint("TOPLEFT", avgTitle, "BOTTOMLEFT", 0, -6)
+avgMessage:SetText("Start the timer to compute averages.")
+
+local avgHeader = CreateFrame("Frame", nil, avgFrame)
+avgHeader:SetPoint("TOPLEFT", avgMessage, "BOTTOMLEFT", 0, -8)
+avgHeader:SetPoint("TOPRIGHT", avgFrame, "TOPRIGHT", -12, 0)
+avgHeader:SetHeight(16)
+
+local avgHeaderName = avgHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+avgHeaderName:SetPoint("LEFT", avgHeader, "LEFT", 26, 0)
+avgHeaderName:SetWidth(200)
+avgHeaderName:SetJustifyH("LEFT")
+avgHeaderName:SetText("Name")
+
+local avgHeaderDelta = avgHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+avgHeaderDelta:SetPoint("LEFT", avgHeaderName, "RIGHT", 16, 0)
+avgHeaderDelta:SetWidth(120)
+avgHeaderDelta:SetJustifyH("RIGHT")
+avgHeaderDelta:SetText("Delta")
+
+local avgHeaderPerHour = avgHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+avgHeaderPerHour:SetPoint("LEFT", avgHeaderDelta, "RIGHT", 20, 0)
+avgHeaderPerHour:SetWidth(140)
+avgHeaderPerHour:SetJustifyH("RIGHT")
+avgHeaderPerHour:SetText("Per Hour")
+
+avgListFrame = CreateFrame("Frame", nil, avgFrame)
+avgListFrame:SetPoint("TOPLEFT", avgHeader, "BOTTOMLEFT", 0, -6)
+avgListFrame:SetPoint("BOTTOMRIGHT", avgFrame, "BOTTOMRIGHT", -12, 12)
+
+local avgClose = CreateFrame("Button", nil, avgFrame, "UIPanelCloseButton")
+avgClose:SetPoint("TOPRIGHT", avgFrame, "TOPRIGHT", 4, 4)
+
+local function GetAvgRow(i)
+    if avgRows[i] then
+        return avgRows[i]
+    end
+    local row = CreateFrame("Frame", nil, avgListFrame)
+    row:SetHeight(20)
+    if i == 1 then
+        row:SetPoint("TOPLEFT", avgListFrame, "TOPLEFT", 0, 0)
+        row:SetPoint("TOPRIGHT", avgListFrame, "TOPRIGHT", 0, 0)
+    else
+        row:SetPoint("TOPLEFT", avgRows[i - 1], "BOTTOMLEFT", 0, -4)
+        row:SetPoint("TOPRIGHT", avgRows[i - 1], "BOTTOMRIGHT", 0, -4)
+    end
+    row.icon = row:CreateTexture(nil, "ARTWORK")
+    row.icon:SetSize(ICON_SIZE - 2, ICON_SIZE - 2)
+    row.icon:SetPoint("LEFT", row, "LEFT", 2, 0)
+    row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.name:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
+    row.name:SetWidth(200)
+    row.name:SetJustifyH("LEFT")
+    row.delta = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.delta:SetPoint("LEFT", row.name, "RIGHT", 16, 0)
+    row.delta:SetWidth(120)
+    row.delta:SetJustifyH("RIGHT")
+    row.perHour = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.perHour:SetPoint("LEFT", row.delta, "RIGHT", 20, 0)
+    row.perHour:SetWidth(140)
+    row.perHour:SetJustifyH("RIGHT")
+    avgRows[i] = row
+    return row
+end
+
+avgFrame:SetScript("OnShow", function()
+    UpdateAvgFrame()
+end)
 local function SortedItemIDs()
     local ids = {}
     for id in pairs(BagDeltaTrackerDB.items) do
@@ -269,7 +482,9 @@ end
 local GOLD_ICON_TEXTURE = 133784
 
 local function FormatItemDelta(base, delta)
-    if not base then return "-" end
+    if not base then
+        return "-"
+    end
     if delta >= 0 then
         return "|cff00ff00+" .. delta .. "|r"
     else
@@ -301,6 +516,93 @@ local function FormatGoldDelta(current, baselineValue)
     return color .. prefix .. FormatGoldAmount(math.abs(diff)) .. "|r"
 end
 
+local function FormatItemPerHour(delta, elapsedSeconds)
+    if not delta or not elapsedSeconds or elapsedSeconds <= 0 then
+        return "-"
+    end
+    local perHour = delta * 3600 / elapsedSeconds
+    if math.abs(perHour) < 0.005 then
+        return "|cffcccccc0/hr|r"
+    end
+    local color = perHour > 0 and "|cff00ff00" or "|cffff2020"
+    return color .. string.format("%+.2f/hr", perHour) .. "|r"
+end
+
+local function FormatGoldPerHour(delta, elapsedSeconds)
+    if not delta or not elapsedSeconds or elapsedSeconds <= 0 then
+        return "-"
+    end
+    local perHour = delta * 3600 / elapsedSeconds
+    if math.abs(perHour) < 0.5 then
+        return "|cffcccccc0/hr|r"
+    end
+    local color = perHour > 0 and "|cff00ff00" or "|cffff2020"
+    local sign = perHour > 0 and "+" or "-"
+    local amount = FormatGoldAmount(math.floor(math.abs(perHour) + 0.5))
+    return color .. sign .. amount .. "/hr|r"
+end
+
+UpdateAvgFrame = function()
+    if avgElapsedText then
+        avgElapsedText:SetText("Elapsed: " .. FormatSeconds(timerElapsed))
+    end
+    if not avgFrame or not avgFrame:IsShown() then
+        return
+    end
+
+    local elapsedSeconds = timerElapsed or 0
+    if not baseline then
+        avgMessage:SetText("Start the timer to compute averages.")
+        for _, row in ipairs(avgRows) do
+            row:Hide()
+        end
+        return
+    end
+
+    if elapsedSeconds <= 0 then
+        avgMessage:SetText("Timer must run before averages appear.")
+        for _, row in ipairs(avgRows) do
+            row:Hide()
+        end
+        return
+    end
+
+    avgMessage:SetText("")
+
+    local rowIndex = 1
+    local currentGold = GetPlayerMoney()
+    if baselineGold then
+        local goldDelta = currentGold - baselineGold
+        local row = GetAvgRow(rowIndex)
+        row.icon:SetTexture(GOLD_ICON_TEXTURE)
+        row.name:SetText("Gold")
+        row.delta:SetText(FormatGoldDelta(currentGold, baselineGold))
+        row.perHour:SetText(FormatGoldPerHour(goldDelta, elapsedSeconds))
+        row:Show()
+        rowIndex = rowIndex + 1
+    end
+
+    local ids = SortedItemIDs()
+    for _, itemID in ipairs(ids) do
+        local base = baseline and baseline[itemID] or nil
+        if base then
+            local row = GetAvgRow(rowIndex)
+            local meta = BagDeltaTrackerDB.items[itemID]
+            row.icon:SetTexture((meta and meta.icon) or 134400)
+            row.name:SetText(meta and meta.name or ("Item " .. itemID))
+            local current = CountItemInBags(itemID)
+            local delta = current - base
+            row.delta:SetText(FormatItemDelta(base, delta))
+            row.perHour:SetText(FormatItemPerHour(delta, elapsedSeconds))
+            row:Show()
+            rowIndex = rowIndex + 1
+        end
+    end
+
+    for i = rowIndex, #avgRows do
+        avgRows[i]:Hide()
+    end
+end
 function UpdateList()
     local rowIndex = 1
     local currentGold = GetPlayerMoney()
@@ -343,9 +645,24 @@ function UpdateList()
     end
 
     UpdateStatus()
+    UpdateAvgFrame()
 end
+function BagDeltaTracker_IncrementRunCount()
+    BagDeltaTrackerDB.runCount = (BagDeltaTrackerDB.runCount or 0) + 1
+    UpdateRunCountDisplay()
+    UpdateAvgFrame()
+end
+
+function BagDeltaTracker_ResetRunCount()
+    BagDeltaTrackerDB.runCount = 1
+    UpdateRunCountDisplay()
+    UpdateAvgFrame()
+end
+
 local function EnsureItemMeta(itemID)
-    if BagDeltaTrackerDB.items[itemID] and BagDeltaTrackerDB.items[itemID].name then return end
+    if BagDeltaTrackerDB.items[itemID] and BagDeltaTrackerDB.items[itemID].name then
+        return
+    end
     local name, _, _, _, _, _, _, _, _, icon = GetItemInfo(itemID)
     if name then
         BagDeltaTrackerDB.items[itemID] = BagDeltaTrackerDB.items[itemID] or {}
@@ -381,11 +698,14 @@ startBtn:SetScript("OnClick", function()
         baseline[itemID] = CountItemInBags(itemID)
     end
     baselineGold = GetPlayerMoney()
+    elapsed = 0
+    StartTimer()
     running = true
     UpdateList()
 end)
 
 endBtn:SetScript("OnClick", function()
+    StopTimer()
     running = false
     UpdateList()
 end)
@@ -394,7 +714,18 @@ resetBtn:SetScript("OnClick", function()
     running = false
     baseline = nil
     baselineGold = nil
+    elapsed = 0
+    ResetTimer()
     UpdateList()
+end)
+
+avgBtn:SetScript("OnClick", function()
+    if avgFrame:IsShown() then
+        avgFrame:Hide()
+    else
+        avgFrame:Show()
+        UpdateAvgFrame()
+    end
 end)
 
 -- Slash command for quick toggle
@@ -406,17 +737,26 @@ SlashCmdList["BAGDELTATRACKER"] = function(msg)
     elseif msg == "hide" then
         f:Hide()
     elseif msg == "reset" then
-        baseline = nil; baselineGold = nil; running = false; UpdateList()
+        baseline = nil
+        baselineGold = nil
+        running = false
+        elapsed = 0
+        ResetTimer()
+        UpdateList()
     else
         print("|cff33ff99BagDeltaTracker|r commands /bdt show | hide | reset")
-    end        
+    end
 end
 
 -- Event handling
 f:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
-        for itemID in pairs(BagDeltaTrackerDB.items) do EnsureItemMeta(itemID) end
+        for itemID in pairs(BagDeltaTrackerDB.items) do
+            EnsureItemMeta(itemID)
+        end
         UpdateList()
+        UpdateTimerDisplay()
+        UpdateRunCountDisplay()
     elseif event == "BAG_UPDATE_DELAYED" then
         if next(BagDeltaTrackerDB.items) ~= nil then
             UpdateList()
@@ -443,7 +783,7 @@ close:SetPoint("TOPRIGHT", f, "TOPRIGHT", 4, 4)
 
 -- Border line under input area
 local line = f:CreateTexture(nil, "BACKGROUND")
-line:SetColorTexture(1,1,1,0.08)
+line:SetColorTexture(1, 1, 1, 0.08)
 line:SetPoint("TOPLEFT", edit, "BOTTOMLEFT", -6, -6)
 line:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -6)
 line:SetHeight(1)
@@ -455,9 +795,17 @@ local function HookRemoveTooltip(btn)
         GameTooltip:AddLine("Remove", 1, 1, 1)
         GameTooltip:Show()
     end)
-    btn:HookScript("OnLeave", function(self) GameTooltip:Hide() end)
+    btn:HookScript("OnLeave", function(self)
+        GameTooltip:Hide()
+    end)
 end
 
-for _, r in ipairs(rows) do if r.remove then HookRemoveTooltip(r.remove) end end
+for _, r in ipairs(rows) do
+    if r.remove then
+        HookRemoveTooltip(r.remove)
+    end
+end
 
 UpdateList()
+
+
