@@ -66,7 +66,6 @@ f:SetScript("OnUpdate", function(self, dt)
     if running then
         elapsed = elapsed + dt
         if elapsed > 1 then
-            print("DEBUG: OnUpdate firing UpdateList")
             UpdateList()
             elapsed = 0
         end
@@ -77,30 +76,25 @@ end)
 local function CountItemInBags(itemID)
     itemID = tonumber(itemID)
     if not itemID then return 0 end
-    local total = 0
-    -- Backpack (0) and bags (1-4)
-    for bag = 0, 4 do
-        local slots = C_Container.GetContainerNumSlots(bag)
-        for slot = 1, slots do
-            local info = C_Container.GetContainerItemInfo(bag, slot)
-            if info and info.itemID == itemID then
-                total = total + (info.stackCount or 0)
-            end
+
+    local count = 0
+
+    if C_Item and C_Item.GetItemCount then
+        local ok, result = pcall(C_Item.GetItemCount, itemID, false, false, false, false)
+        if ok and type(result) == "number" then
+            count = result
         end
     end
-    -- Reagent bag (5)
-    if C_Container.GetNumReagentBagSlots and C_Container.GetNumReagentBagSlots() > 0 then
-        local bag = 5
-        local slots = C_Container.GetContainerNumSlots(bag)
-        for slot = 1, slots do
-            local info = C_Container.GetContainerItemInfo(bag, slot)
-            if info and info.itemID == itemID then
-                total = total + (info.stackCount or 0)
-            end
+
+    if (not count or count == 0) and GetItemCount then
+        local ok, result = pcall(GetItemCount, itemID, false, false, false, false)
+        if ok and type(result) == "number" then
+            count = math.max(count or 0, result)
         end
     end
-    print("DEBUG: CountItemInBags", itemID, total)
-    return total
+
+    count = count or 0
+    return count
 end
 
 -- Parse user input into itemID
@@ -297,7 +291,6 @@ startBtn:SetScript("OnClick", function()
     baseline = {}
     for itemID in pairs(BagDeltaTrackerDB.items) do
         baseline[itemID] = CountItemInBags(itemID)
-        print("DEBUG: Baseline for", itemID, "=", baseline[itemID])
     end
     running = true
     UpdateList()
