@@ -4,5 +4,6 @@
 ## Author: Fornzy
 ## Version 0.1.0
 ## SavedVariables: BagDeltaTrackerDB
+## OptionalDeps: LibDataBroker-1.1, LibDBIcon-1.0
 
 BagDeltaTracker.lua

@@ -1,4 +1,4 @@
-﻿--[[
+--[[
 Bag Delta Tracker (Retail Only)
 Tracks player-specified items and shows current bag counts + delta (current - baseline).
 Add items by Shift-clicking from bags into the input, or paste an item link or itemID.
@@ -9,7 +9,10 @@ Add items by Shift-clicking from bags into the input, or paste an item link or i
         y = -200
     },
     scale = 1,
-    runCount = 1
+    runCount = 1,
+    minimap = {
+        hide = false,
+    }
 }
 
 -- Clean up old string keys in items table
@@ -22,6 +25,11 @@ do
 end
 
 BagDeltaTrackerDB.runCount = tonumber(BagDeltaTrackerDB.runCount) or 1
+BagDeltaTrackerDB.minimap = BagDeltaTrackerDB.minimap or {}
+if type(BagDeltaTrackerDB.minimap.hide) ~= "boolean" then
+    BagDeltaTrackerDB.minimap.hide = false
+end
+
 
 local ADDON_NAME = "BagDeltaTracker"
 local f = CreateFrame("Frame", ADDON_NAME .. "Frame", UIParent, "BackdropTemplate")
@@ -53,6 +61,7 @@ f:SetBackdrop({
     }
 })
 f:SetBackdropColor(0, 0, 0, 0.85)
+f:Hide()
 
 -- Title
 local title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
@@ -85,6 +94,45 @@ local avgMessage
 local avgListFrame
 local avgRows = {}
 local UpdateAvgFrame
+
+local function ToggleMainFrame()
+    if f:IsShown() then
+        f:Hide()
+    else
+        f:Show()
+    end
+end
+
+local LDB = LibStub and LibStub("LibDataBroker-1.1", true)
+local DBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
+local minimapDataObject
+
+local function EnsureMinimapIcon()
+    if not DBIcon or not LDB then
+        return
+    end
+    if not minimapDataObject then
+        minimapDataObject = LDB:NewDataObject(ADDON_NAME, {
+            type = "data source",
+            text = "Bag Delta Tracker",
+            icon = "Interface\\AddOns\\BagDeltaTracker\\media\\BagDeltaTrackerRound",
+            OnClick = function(_, button)
+                if button == "LeftButton" or button == "RightButton" then
+                    ToggleMainFrame()
+                end
+            end,
+            OnTooltipShow = function(tooltip)
+                if not tooltip or not tooltip.AddLine then
+                    return
+                end
+                tooltip:AddLine("Bag Delta Tracker")
+                tooltip:AddLine("Left-click to toggle window", 0.8, 0.8, 0.8)
+            end,
+        })
+    end
+    DBIcon:Register(ADDON_NAME, minimapDataObject, BagDeltaTrackerDB.minimap)
+end
+
 
 local function FormatSeconds(totalSeconds)
     totalSeconds = math.max(0, math.floor(totalSeconds or 0))
@@ -736,6 +784,8 @@ SlashCmdList["BAGDELTATRACKER"] = function(msg)
         f:Show()
     elseif msg == "hide" then
         f:Hide()
+    elseif msg == "toggle" then
+        ToggleMainFrame()
     elseif msg == "reset" then
         baseline = nil
         baselineGold = nil
@@ -744,10 +794,20 @@ SlashCmdList["BAGDELTATRACKER"] = function(msg)
         ResetTimer()
         UpdateList()
     else
-        print("|cff33ff99BagDeltaTracker|r commands /bdt show | hide | reset")
+        print("|cff33ff99BagDeltaTracker|r commands /bdt show | hide | toggle | reset")
     end
 end
 
+if AddonCompartmentFrame and AddonCompartmentFrame.RegisterAddon then
+    AddonCompartmentFrame:RegisterAddon({
+        text = "Bag Delta Tracker",
+        icon = "Interface\\AddOns\\BagDeltaTracker\\media\\BagDeltaTrackerRound",
+        notCheckable = true,
+        func = function()
+            ToggleMainFrame()
+        end,
+    })
+end
 -- Event handling
 f:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
@@ -757,6 +817,7 @@ f:SetScript("OnEvent", function(self, event, ...)
         UpdateList()
         UpdateTimerDisplay()
         UpdateRunCountDisplay()
+        EnsureMinimapIcon()
     elseif event == "BAG_UPDATE_DELAYED" then
         if next(BagDeltaTrackerDB.items) ~= nil then
             UpdateList()
@@ -807,5 +868,3 @@ for _, r in ipairs(rows) do
 end
 
 UpdateList()
-
-
